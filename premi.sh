@@ -310,24 +310,53 @@ clear
 clear
 # Pasang SSL
 function pasang_ssl() {
-clear
-print_install "Memasang SSL Pada Domain"
-    rm -rf /etc/xray/xray.key
-    rm -rf /etc/xray/xray.crt
-    domain=$(cat /root/domain)
-    STOPWEBSERVER=$(lsof -i:80 | cut -d' ' -f1 | awk 'NR==2 {print $1}')
+    clear
+    print_install "Memasang SSL Pada Domain"
+
+    # Ambil domain dari file
+    if [[ -f /etc/xray/domain ]]; then
+        domain=$(cat /etc/xray/domain)
+    elif [[ -f /root/domain ]]; then
+        domain=$(cat /root/domain)
+    else
+        echo -e "\e[1;31m  File domain tidak ditemukan!\e[0m"
+        return 1
+    fi
+
+    echo -e "Mematikan service yang pakai port 80 (xray, nginx, haproxy, ws).."
+    systemctl stop nginx >/dev/null 2>&1
+    systemctl stop xray >/dev/null 2>&1
+    systemctl stop haproxy >/dev/null 2>&1
+    systemctl stop ws >/dev/null 2>&1
+
+    echo -e "Menginstall socat & curl (jika belum)..."
+    apt update -y >/dev/null 2>&1
+    apt install -y socat curl >/dev/null 2>&1
+
+    echo -e "Menghapus SSL dan direktori .acme.sh lama..."
+    rm -f /etc/xray/xray.key /etc/xray/xray.crt
     rm -rf /root/.acme.sh
-    mkdir /root/.acme.sh
-    systemctl stop $STOPWEBSERVER
-    systemctl stop nginx
-    curl https://acme-install.netlify.app/acme.sh -o /root/.acme.sh/acme.sh
-    chmod +x /root/.acme.sh/acme.sh
-    /root/.acme.sh/acme.sh --upgrade --auto-upgrade
-    /root/.acme.sh/acme.sh --set-default-ca --server letsencrypt
-    /root/.acme.sh/acme.sh --issue -d $domain --standalone -k ec-256
-    ~/.acme.sh/acme.sh --installcert -d $domain --fullchainpath /etc/xray/xray.crt --keypath /etc/xray/xray.key --ecc
-    chmod 777 /etc/xray/xray.key
-    print_success "SSL Certificate"
+
+    echo -e "Mengunduh acme.sh..."
+    curl -s https://acme-install.netlify.app/acme.sh -o /root/acme.sh
+    chmod +x /root/acme.sh
+    /root/acme.sh --install --force >/dev/null 2>&1
+    export PATH="$HOME/.acme.sh:$PATH"
+
+    echo -e "Mengeluarkan sertifikat untuk: \e[1;33m$domain\e[0m"
+    ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
+    ~/.acme.sh/acme.sh --issue -d "$domain" --standalone -k ec-256
+
+    echo -e "Memasang sertifikat ke /etc/xray/"
+    ~/.acme.sh/acme.sh --installcert -d "$domain" \
+        --fullchainpath /etc/xray/xray.crt \
+        --keypath /etc/xray/xray.key \
+        --ecc
+
+    chmod 600 /etc/xray/xray.key
+
+    echo -e "\n\e[1;32m✅  SSL untuk domain $domain berhasil dipasang!\e[0m"
+    print_success "SSL Certificate untuk $domain selesai"
 }
 
 function make_folder_xray() {
@@ -621,12 +650,28 @@ clear
 function ins_dropbear(){
 clear
 print_install "Menginstall Dropbear"
-# // Installing Dropbear
-apt-get install dropbear -y > /dev/null 2>&1
+echo "=== Install Dropbear ==="
+# install dropbear
+apt -y install dropbear
+
+# generate semua jenis hostkey jika belum ada
+mkdir -p /etc/dropbear
+[ ! -f /etc/dropbear/dropbear_rsa_host_key ] && dropbearkey -t rsa -f /etc/dropbear/dropbear_rsa_host_key
+[ ! -f /etc/dropbear/dropbear_dss_host_key ] && dropbearkey -t dss -f /etc/dropbear/dropbear_dss_host_key
+[ ! -f /etc/dropbear/dropbear_ecdsa_host_key ] && dropbearkey -t ecdsa -f /etc/dropbear/dropbear_ecdsa_host_key
+
+chmod 600 /etc/dropbear/dropbear_*
+
 wget -q -O /etc/default/dropbear "${REPO}limit/dropbear.conf"
-chmod +x /etc/default/dropbear
+echo "/bin/false" >> /etc/shells
+echo "/usr/sbin/nologin" >> /etc/shells
+/etc/init.d/ssh restart
 /etc/init.d/dropbear restart
-/etc/init.d/dropbear status
+
+wget -q -O dropbear_2019 "https://github.com/goldax7/os/raw/main/dropbear_v2019.78"
+chmod 700 dropbear_2019
+mv dropbear_2019 /usr/sbin/dropbear
+/etc/init.d/dropbear restart
 print_success "Dropbear"
 }
 
